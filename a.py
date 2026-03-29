@@ -68,7 +68,7 @@ class ICMP_Header:
         self.type, self.code = struct.unpack('BB', buffer[0:2])
 
     def get_sequence_num(self, buffer):
-        self.seq_num = struct.unpack('>H', buffer[0:2])[0]
+        self.seq_num = struct.unpack('>H', buffer)[0]
 
 class packet:
     def __init__(self):
@@ -238,15 +238,11 @@ def analyze_traceroute(parsed_packets):
     intermediate_nodes = []
     protocols = set()
 
-    frag_count = 0
-    last_frag_offset = 0
+    fragments = {}
 
     probes_sent = {} # Key: match_key -> List of [timestamps]
     rtt_measurements = {}
     ult_rtts = []
-
-    fragments = {}
-
     # Step 2: (Node identification)
     for p in parsed_packets:
         protocols.add(p.IP_header.protocol)
@@ -258,16 +254,10 @@ def analyze_traceroute(parsed_packets):
             ultimate_dst = p.IP_header.dst_ip
 
             # Fragmentation Logic
-            # Step 4: Tracking the fragments
-            # checks if the "More fragments" flag is 1, or if the offset is greater than 0, to count how many chunks the datagram was split in
-            offset = p.IP_header.frag_offset
-            mf = p.IP_header.flags & 0x1
-            if mf == 1 or p.IP_header.frag_offset > 0: #TODO:changed this
-                if offset > last_frag_offset: last_frag_offset = offset
-                if offset == 0: frag_count = 0 # reset counter if a new fragmented datagram begins
-                frag_count += 1
-            elif frag_count == 0:
-                frag_count = 1 # 1 if no fragments created (1 total datagram)
+            datagram_id = p.IP_header.identification
+            if datagram_id not in fragments:
+                fragments[datagram_id] = []
+            fragments[datagram_id].append(p)
 
             match_key = p.UDP_header.src_port if p.IP_header.protocol==17 else p.ICMP_header.seq_num
             if match_key not in probes_sent: probes_sent[match_key] = []
@@ -276,10 +266,11 @@ def analyze_traceroute(parsed_packets):
         # B. Errores Returned
         elif p.is_error and p.IP_header.dst_ip == source_node:
             router_ip = p.IP_header.src_ip
-            # Only add if it isn't the final destination and hasn't been added yet
-            if router_ip != ultimate_dst and router_ip not in intermediate_nodes:
+            # Only add if it isn't the final destination
+            if router_ip != ultimate_dst:
                 intermediate_nodes.append(router_ip) # STep 2: Add itermediate nodes
-                rtt_measurements[router_ip] = []
+                if router_ip not in rtt_measurements:
+                    rtt_measurements[router_ip] = []
             # Step 3: In analyze_traceroute (Playing matchmaker)
             # Step 5: Calculate RTT
             if p.embedded_match_key and p.embedded_match_key in probes_sent:
@@ -293,9 +284,14 @@ def analyze_traceroute(parsed_packets):
                     else:
                         rtt_measurements[router_ip].append(rtt)
                 del probes_sent[p.embedded_match_key] # Process fragments once
-    
-    if frag_count==1 and last_frag_offset==0:
-        pass # expects "1" and "0 bytes" for unfragmented traces
+
+    frag_count = 1
+    last_frag_offset = 0
+
+    for fid, frags in fragments.items():
+        if len(frags) > frag_count:
+            frag_count = len(frags)
+            last_frag_offset = max(f.frag_offset for f in frags)
 
     return source_node, ultimate_dst, intermediate_nodes, protocols, frag_count, last_frag_offset, rtt_measurements, ult_rtts
 
