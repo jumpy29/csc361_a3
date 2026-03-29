@@ -266,7 +266,7 @@ def analyze_traceroute(parsed_packets):
                 if ident not in fragments:
                     fragments[ident] = []
 
-                fragments[ident].append(offset)
+                fragments[ident].append((offset, mf_flag))
 
             match_key = p.UDP_header.src_port if p.IP_header.protocol==17 else p.ICMP_header.seq_num
             if match_key not in probes_sent: probes_sent[match_key] = []
@@ -295,11 +295,17 @@ def analyze_traceroute(parsed_packets):
     
     fragment_results = []
     for ident in fragments:
-        offsets = fragments[ident]
+        entries = fragments[ident]
 
-        if len(offsets)>1:
-            frag_count = len(offsets)
-            last_frag_offset = max(offsets)
+        unique_offsets = set(o for o, mf in entries)
+        has_mf = any(mf == 1 for _, mf in entries)
+
+        if has_mf or len(unique_offsets) > 1:
+            frag_count = len(unique_offsets)
+            if 0 not in unique_offsets:
+                frag_count += 1
+                
+            last_frag_offset = max(unique_offsets)
             fragment_results.append((ident, frag_count, last_frag_offset))
 
     if not fragment_results:
@@ -316,7 +322,7 @@ def calc_stats(rtt_list):
 
 def generate_output(src, dst, routers, protos, fragment_results, rtts, ult_rtts):
     print(f"The IP address of the source node: {src}")
-    print(f"The IP address of the destination node: {dst}")
+    print(f"The IP address of the ultimate destination node: {dst}")
     print("The IP addresses of the intermediate destination nodes:")
     for i, router in enumerate(routers, 1):
         print(f"router {i}: {router}")
