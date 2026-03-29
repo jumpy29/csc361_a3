@@ -4,3 +4,5 @@ Example with trace_capture.pcap
 Run : "python3 a2.py trace_capture.pcap"
 
 Implemented all required functions
+
+Solution for part 2. is in requirement2.pdf
