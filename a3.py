@@ -257,16 +257,16 @@ def analyze_traceroute(parsed_packets):
         if p.is_probe and p.IP_header.src_ip==source_node:
             ultimate_dst = p.IP_header.dst_ip
 
-            # Fragmentation Logic
-            # Step 4: Tracking the fragments
-            # checks if the "More fragments" flag is 1, or if the offset is greater than 0, to count how many chunks the datagram was split in
+            # fragmentation
+            ident = p.IP_header.identification
             offset = p.IP_header.frag_offset
-            if p.IP_header.flags==1 or offset>0:
-                if offset > last_frag_offset: last_frag_offset = offset
-                if offset == 0: frag_count = 0 # reset counter if a new fragmented datagram begins
-                frag_count += 1
-            elif frag_count == 0:
-                frag_count = 1 # 1 if no fragments created (1 total datagram)
+            mf_flag = p.IP_header.flags & 0x1
+
+            if mf_flag==1 or offset>0:
+                if ident not in fragments:
+                    fragments[ident] = []
+
+                fragments[ident].append(offset)
 
             match_key = p.UDP_header.src_port if p.IP_header.protocol==17 else p.ICMP_header.seq_num
             if match_key not in probes_sent: probes_sent[match_key] = []
@@ -293,10 +293,19 @@ def analyze_traceroute(parsed_packets):
                         rtt_measurements[router_ip].append(rtt)
                 del probes_sent[p.embedded_match_key] # Process fragments once
     
-    if frag_count==1 and last_frag_offset==0:
-        pass # expects "1" and "0 bytes" for unfragmented traces
+    fragment_results = []
+    for ident in fragments:
+        offsets = fragments[ident]
 
-    return source_node, ultimate_dst, intermediate_nodes, protocols, frag_count, last_frag_offset, rtt_measurements, ult_rtts
+        if len(offsets)>1:
+            frag_count = len(offsets)
+            last_frag_offset = max(offsets)
+            fragment_results.append((ident, frag_count, last_frag_offset))
+
+    if not fragment_results:
+        fragment_results.append((None, 0, 0))
+
+    return source_node, ultimate_dst, intermediate_nodes, protocols, fragment_results, rtt_measurements, ult_rtts
 
 # calculate RTT Averages and Standard Deviation
 def calc_stats(rtt_list):
@@ -305,7 +314,7 @@ def calc_stats(rtt_list):
     variance = sum((x-mean) ** 2 for x in rtt_list) / (len(rtt_list) -1) if len(rtt_list) > 1 else 0.0
     return round(mean, 2), round(math.sqrt(variance), 2)
 
-def generate_output(src, dst, routers, protos, fc, f_off, rtts, ult_rtts):
+def generate_output(src, dst, routers, protos, fragment_results, rtts, ult_rtts):
     print(f"The IP address of the source node: {src}")
     print(f"The IP address of the destination node: {dst}")
     print("The IP addresses of the intermediate destination nodes:")
@@ -317,8 +326,13 @@ def generate_output(src, dst, routers, protos, fc, f_off, rtts, ult_rtts):
         if p==1: print("1: ICMP")
         if p==17: print("17: UDP")
 
-    print(f"The number of fragments created from the original datagram is {fc}")
-    print(f"The offset of the last fragment is: {f_off} bytes")
+    for ident, fc, f_off in fragment_results:
+        if ident is None:
+            print("The number of fragments created from the original datagram is: 0")
+            print("The offset of the last fragment is: 0")
+        else:
+            print(f"The number of fragments created from the original datagram {ident} is: {fc}")
+            print(f"The offset of the last fragment is: {f_off}")
 
     for router in routers: 
         mean_rtt, sd_rtt = calc_stats(rtts[router])
@@ -341,5 +355,5 @@ if __name__=="__main__":
         parsed_packets = process_packets(file_obj, endian_format, is_nano)
         file_obj.close()
 
-        src, dst, routers, protos, fc, f_off, rtts, ult_rtts = analyze_traceroute(parsed_packets)
-        generate_output(src, dst, routers, protos, fc, f_off, rtts, ult_rtts)
+        src, dst, routers, protos, fragment_results, rtts, ult_rtts = analyze_traceroute(parsed_packets)
+        generate_output(src, dst, routers, protos, fragment_results, rtts, ult_rtts)
